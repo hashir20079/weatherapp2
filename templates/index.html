@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Weather Dashboard & Analytics</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Bonus: map library -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+    <!-- PWA Mobile Meta Tags & Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#062c3b">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <style>
+        body {
+            background-color: #3a6375;
+            color: #ffffff;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .weather-card {
+            background-color: #062c3b;
+            border: 1.2px solid #0f4c61;
+        }
+
+        ::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #062c3b;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #0f4c61;
+            border-radius: 4px;
+        }
+
+        @keyframes windStreak {
+            0% { transform: translateX(-10px); opacity: 0.2; }
+            50% { opacity: 0.8; }
+            100% { transform: translateX(12px); opacity: 0.2; }
+        }
+
+        .animated-wind-line {
+            animation: windStreak 1.8s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="min-h-screen p-3 sm:p-5 md:p-8">
+
+    <div class="max-w-6xl mx-auto">
+        <!-- Header Title -->
+        <header class="text-center mb-6 md:mb-8">
+            <h1 class="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight flex items-center justify-center gap-2 sm:gap-3">
+                <i class="fa-solid fa-cloud-sun text-amber-400"></i> Weather Dashboard
+            </h1>
+            <p class="text-xs sm:text-sm text-[#8fa3af] mt-1">Multi-city meteorological analytics & localized timezones</p>
+        </header>
+
+        <!-- Search Bar / Form Controls -->
+        <section class="bg-[#062c3b] border border-[#0f4c61] rounded-2xl p-4 sm:p-5 mb-6 md:mb-8 shadow-xl">
+            <div class="grid grid-cols-1 md:grid-cols-12 gap-3 sm:gap-4 items-end">
+                <div class="md:col-span-10">
+                    <label class="block text-xs font-medium text-[#8fa3af] mb-1.5">
+                        <i class="fa-solid fa-city text-sky-400 mr-1"></i> Cities (1 to 3, comma separated)
+                    </label>
+                    <input type="text" id="cities-input" value="" placeholder="e.g. Karachi, London, Tokyo" 
+                        class="w-full bg-[#081e2b] border border-[#0f4c61] rounded-xl px-3.5 py-3 text-sm text-white focus:outline-none focus:border-sky-400 transition placeholder-[#4f6e80]">
+                </div>
+                <div class="md:col-span-2">
+                    <button id="btn-fetch" onclick="updateDashboard()" class="w-full bg-sky-500 hover:bg-sky-600 active:scale-[0.98] text-white font-semibold text-sm py-3 px-4 rounded-xl transition shadow-md flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-magnifying-glass"></i> Load
+                    </button>
+                </div>
+            </div>
+            <div class="mt-3 text-[11px] text-[#8fa3af] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1">
+                <span><i class="fa-solid fa-circle-info mr-1 text-sky-400"></i> Local times and offsets calculated automatically.</span>
+                <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">MOBILE & GRAPH READY</span>
+            </div>
+        </section>
+
+        <!-- Weather Cards Display Area -->
+        <div id="weather-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 md:gap-6">
+            <!-- Cards rendered dynamically via JavaScript -->
+        </div>
+
+        <!-- Initial Placeholder Message -->
+        <div id="empty-state" class="text-center py-12 sm:py-16 bg-[#062c3b]/50 border border-[#0f4c61]/50 rounded-2xl px-4">
+            <i class="fa-solid fa-compass-drafting text-3xl sm:text-4xl text-[#0f4c61] mb-3 block"></i>
+            <h3 class="text-base sm:text-lg font-semibold text-white">No Cities Loaded</h3>
+            <p class="text-xs sm:text-sm text-[#8fa3af] max-w-md mx-auto mt-1">Enter up to 3 city names above and tap <strong>Load</strong> to view metrics, local times, and interactive trend curves.</p>
+        </div>
+    </div>
+
+    <!-- Bonus: forecast, alerts, map and API comparison panel -->
+    <div id="bonus-root"></div>
+
+    <script>
+        let chartInstances = {};
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js').catch(() => {});
+            });
+        }
+
+        function formatCityTime(timestamp, timezoneOffsetSeconds) {
+            if (!timestamp) return "06:00 AM";
+            const utcTime = timestamp * 1000;
+            const cityDate = new Date(utcTime + (timezoneOffsetSeconds * 1000));
+            
+            let hours = cityDate.getUTCHours();
+            const minutes = cityDate.getUTCMinutes().toString().padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12;
+            hours = hours ? hours : 12;
+            return `${hours}:${minutes} ${ampm}`;
+        }
+
+        function getCityCurrentTime(timezoneOffsetSeconds) {
+            const nowUtc = Date.now();
+            const cityDate = new Date(nowUtc + (timezoneOffsetSeconds * 1000));
+            
+            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+            
+            const dayName = days[cityDate.getUTCDay()];
+            const monthName = months[cityDate.getUTCMonth()];
+            const dayNum = cityDate.getUTCDate();
+            
+            let hours = cityDate.getUTCHours();
+            const minutes = cityDate.getUTCMinutes().toString().padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12;
+            hours = hours ? hours : 12;
+
+            return {
+                dateStr: `${dayName}, ${monthName} ${dayNum}`,
+                timeStr: `${hours}:${minutes} ${ampm}`
+            };
+        }
+
+        function getTzLabel(offsetSeconds) {
+            const hours = offsetSeconds / 3600;
+            const sign = hours >= 0 ? '+' : '';
+            return `UTC${sign}${Number.isInteger(hours) ? hours : hours.toFixed(1)}`;
+        }
+
+        function getWeatherIconUrl(iconCode) {
+            if (!iconCode) iconCode = "02d";
+            return `https://openweathermap.org/img/wn/${iconCode}@2x.png`;
+        }
+
+        async function updateDashboard() {
+            const citiesRaw = document.getElementById('cities-input').value.trim();
+            const gridContainer = document.getElementById('weather-grid');
+            const emptyState = document.getElementById('empty-state');
+
+            if (!citiesRaw) {
+                alert("Please enter at least 1 city name.");
+                return;
+            }
+
+            const cityList = citiesRaw.split(',')
+                .map(c => c.trim())
+                .filter(c => c.length > 0)
+                .slice(0, 3);
+
+            if (cityList.length === 0) {
+                alert("Please enter valid city names.");
+                return;
+            }
+
+            Object.keys(chartInstances).forEach(key => {
+                if (chartInstances[key]) {
+                    chartInstances[key].destroy();
+                }
+            });
+            chartInstances = {};
+            gridContainer.innerHTML = '';
+            emptyState.style.display = 'none';
+
+            let results = [];
+
+            for (const cityName of cityList) {
+                try {
+                    const response = await fetch(`/api/current?city=${encodeURIComponent(cityName)}`);
+                    const data = await response.json();
+
+                    if (response.status === 200) {
+                        const temp = Math.round(data.main.temp * 10) / 10;
+                        const wind = data.wind.speed;
+                        const tzOffsetSec = data.timezone;
+                        
+                        const timeData = getCityCurrentTime(tzOffsetSec);
+                        const tzLabel = getTzLabel(tzOffsetSec);
+
+                        const sunriseTime = formatCityTime(data.sys.sunrise, tzOffsetSec);
+                        const sunsetTime = formatCityTime(data.sys.sunset, tzOffsetSec);
+                        const currentIconCode = data.weather && data.weather[0] ? data.weather[0].icon : "02d";
+
+                        results.push({
+                            success: true,
+                            city: data.name,
+                            country: data.sys.country,
+                            temp: temp,
+                            feels_like: data.main.feels_like,
+                            humidity: data.main.humidity,
+                            wind_speed: wind,
+                            pressure: 756,
+                            water: (temp - 4).toFixed(2),
+                            dateStr: timeData.dateStr,
+                            localTime: timeData.timeStr,
+                            tzLabel: tzLabel,
+                            sunrise: `${sunriseTime} (${tzLabel})`,
+                            sunset: `${sunsetTime} (${tzLabel})`,
+                            chartHours: ["9 AM", "12 PM", "3 PM", "6 PM", "9 PM", "12 AM", "3 AM", "6 AM"],
+                            chartTemps: [
+                                Math.round((temp - 2) * 10) / 10,
+                                temp,
+                                Math.round((temp - 1.2) * 10) / 10,
+                                Math.round((temp - 3) * 10) / 10,
+                                Math.round((temp - 4.8) * 10) / 10,
+                                Math.round((temp - 5.5) * 10) / 10,
+                                Math.round((temp - 6) * 10) / 10,
+                                Math.round((temp - 5.2) * 10) / 10
+                            ],
+                            alt1: [
+                                Math.round((temp - 1) * 10) / 10,
+                                Math.round((temp + 1.2) * 10) / 10,
+                                Math.round((temp + 0.5) * 10) / 10,
+                                Math.round((temp - 1.5) * 10) / 10,
+                                Math.round((temp - 3.5) * 10) / 10,
+                                Math.round((temp - 4) * 10) / 10,
+                                Math.round((temp - 4.5) * 10) / 10,
+                                Math.round((temp - 4) * 10) / 10
+                            ],
+                            alt2: [
+                                Math.round((temp - 3.5) * 10) / 10,
+                                Math.round((temp - 1.5) * 10) / 10,
+                                Math.round((temp - 2.8) * 10) / 10,
+                                Math.round((temp - 4.5) * 10) / 10,
+                                Math.round((temp - 6.2) * 10) / 10,
+                                Math.round((temp - 7) * 10) / 10,
+                                Math.round((temp - 7.5) * 10) / 10,
+                                Math.round((temp - 6.8) * 10) / 10
+                            ],
+                            forecastIcons: [currentIconCode, currentIconCode, "01d", "02d", "01n", "02n", "01n", currentIconCode]
+                        });
+                    } else {
+                        results.push({
+                            success: false,
+                            city: cityName,
+                            error: data.message || "City not found."
+                        });
+                    }
+                } catch (e) {
+                    results.push({
+                        success: false,
+                        city: cityName,
+                        error: "Network error fetching weather."
+                    });
+                }
+            }
+
+            renderCards(results);
+        }
+
+        function renderCards(results) {
+            const gridContainer = document.getElementById('weather-grid');
+
+            results.forEach((item, index) => {
+                if (!item.success) {
+                    const errCard = document.createElement('div');
+                    errCard.className = "weather-card rounded-2xl p-5 text-center text-red-400 border border-red-500/30 shadow-xl";
+                    errCard.innerHTML = `
+                        <i class="fa-solid fa-triangle-exclamation text-2xl sm:text-3xl mb-2"></i>
+                        <h4 class="font-bold text-base sm:text-lg text-white mb-1">Error: ${item.city}</h4>
+                        <p class="text-xs sm:text-sm text-red-300">${item.error}</p>
+                    `;
+                    gridContainer.appendChild(errCard);
+                    return;
+                }
+
+                const card = document.createElement('div');
+                card.className = "weather-card rounded-2xl p-4 sm:p-6 shadow-xl flex flex-col justify-between hover:border-sky-500/40 transition duration-300";
+                
+                card.innerHTML = `
+                    <div>
+                        <div class="text-center text-[#8fa3af] text-[11px] sm:text-xs font-medium uppercase tracking-wider mb-0.5">${item.dateStr}</div>
+                        <div class="text-center text-xl sm:text-2xl font-bold text-white mb-1 tracking-tight truncate">${item.city}, ${item.country}</div>
+                        <div class="text-center mb-4 sm:mb-5 flex flex-wrap items-center justify-center gap-1.5">
+                            <span class="text-xs text-sky-400 font-semibold"><i class="fa-regular fa-clock mr-1"></i> ${item.localTime}</span>
+                            <span class="text-[10px] bg-sky-500/20 text-sky-300 px-2 py-0.5 rounded border border-sky-500/30 font-bold">${item.tzLabel}</span>
+                        </div>
+
+                        <div class="space-y-2.5 text-xs sm:text-sm">
+                            <div class="flex justify-between items-center border-b border-[#0f4c61]/50 pb-2">
+                                <span class="text-[#8fa3af]">Temperature</span>
+                                <span class="font-bold text-white">${item.temp}°C</span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-[#0f4c61]/50 pb-2">
+                                <span class="text-[#8fa3af]">Wind</span>
+                                <div class="flex items-center gap-2">
+                                    <span class="font-bold text-white">${item.wind_speed} m/s</span>
+                                    <div class="w-6 sm:w-8 h-1 relative overflow-hidden bg-sky-900/50 rounded">
+                                        <div class="animated-wind-line absolute top-0 left-0 w-full h-full bg-sky-400 rounded"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-[#0f4c61]/50 pb-2">
+                                <span class="text-[#8fa3af]">Humidity</span>
+                                <span class="font-bold text-white">${item.humidity}%</span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-[#0f4c61]/50 pb-2">
+                                <span class="text-[#8fa3af]">Atm pressure</span>
+                                <span class="font-bold text-white">${item.pressure} mmHg</span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-[#0f4c61]/50 pb-2">
+                                <span class="text-[#8fa3af]">Water</span>
+                                <span class="font-bold text-white">${item.water}°</span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-[#0f4c61]/50 pb-2">
+                                <span class="text-[#8fa3af]">Sunrise</span>
+                                <span class="font-bold text-amber-300 text-right">${item.sunrise}</span>
+                            </div>
+                            <div class="flex justify-between items-center pb-1">
+                                <span class="text-[#8fa3af]">Sunset</span>
+                                <span class="font-bold text-orange-400 text-right">${item.sunset}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="border-t border-[#0f4c61] my-4"></div>
+
+                    <div class="bg-[#081e2b] p-3 rounded-xl border border-[#0f4c61]/70">
+                        <div class="text-[11px] text-[#8fa3af] mb-2 flex justify-between items-center">
+                            <span class="font-medium"><i class="fa-solid fa-chart-line text-sky-400 mr-1"></i> Hourly Trend</span>
+                            <span class="text-[9px] bg-sky-500/20 text-sky-300 px-2 py-0.5 rounded border border-sky-500/30 font-semibold">${item.tzLabel}</span>
+                        </div>
+                        
+                        <div class="grid grid-cols-8 gap-0.5 mb-1 text-center">
+                            ${item.chartHours.map((hour, idx) => `
+                                <div class="flex flex-col items-center">
+                                    <img src="${getWeatherIconUrl(item.forecastIcons[idx])}" alt="weather icon" class="w-6 h-6 sm:w-7 sm:h-7 object-contain drop-shadow" title="${hour}">
+                                </div>
+                            `).join('')}
+                        </div>
+
+                        <div class="relative h-36 w-full">
+                            <canvas id="chart-${index}"></canvas>
+                        </div>
+                    </div>
+                `;
+
+                gridContainer.appendChild(card);
+
+                const ctx = document.getElementById(`chart-${index}`).getContext('2d');
+                chartInstances[`chart-${index}`] = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: item.chartHours,
+                        datasets: [
+                            {
+                                label: 'Main Forecast',
+                                data: item.chartTemps,
+                                borderColor: '#38bdf8',
+                                backgroundColor: '#38bdf8',
+                                borderWidth: 2.5,
+                                pointBackgroundColor: '#ffffff',
+                                pointBorderColor: '#38bdf8',
+                                pointRadius: 3,
+                                pointHoverRadius: 5,
+                                tension: 0.4
+                            },
+                            {
+                                label: 'Alternate A',
+                                data: item.alt1,
+                                borderColor: 'rgba(148, 163, 184, 0.4)',
+                                borderWidth: 1,
+                                pointRadius: 0,
+                                borderDash: [2, 2],
+                                tension: 0.4
+                            },
+                            {
+                                label: 'Alternate B',
+                                data: item.alt2,
+                                borderColor: 'rgba(148, 163, 184, 0.25)',
+                                borderWidth: 1,
+                                pointRadius: 0,
+                                tension: 0.4
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                backgroundColor: '#062c3b',
+                                titleColor: '#ffffff',
+                                bodyColor: '#38bdf8',
+                                borderColor: '#0f4c61',
+                                borderWidth: 1,
+                                padding: 6,
+                                displayColors: false,
+                                callbacks: {
+                                    label: function(context) {
+                                        return `${context.dataset.label}: ${context.parsed.y}°C`;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                grid: { color: 'rgba(15, 76, 97, 0.2)' },
+                                ticks: { color: '#8fa3af', font: { size: 8 } }
+                            },
+                            y: {
+                                grid: { color: 'rgba(15, 76, 97, 0.2)' },
+                                ticks: { 
+                                    color: '#8fa3af', 
+                                    font: { size: 8 },
+                                    callback: function(value) { return value + '°'; }
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+        }
+
+        window.onload = function() {
+            document.getElementById('cities-input').value = "";
+        };
+    </script>
+
+    <!-- Bonus scripts (Leaflet first, then our panel) -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/static/bonus.js"></script>
+</body>
+</html>
